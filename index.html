@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Parbhu Household Planner – Google Integrated</title>
+  <title>Parbhu Household Planner</title>
   <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/feather-icons"></script>
@@ -36,9 +36,22 @@
     .badge { display:inline-flex; align-items:center; padding: 0.125rem 0.5rem; border-radius: 0.375rem; font-size: 0.75rem; background: rgba(255,255,255,0.08); }
   </style>
 
-  <!-- Google Identity Services & API client -->
+  <!-- Google Identity Services & Google API Client -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="https://apis.google.com/js/api.js"></script>
+
+  <!-- Your Google config -->
+  <script>
+    const GOOGLE_CLIENT_ID = "67683358478-9b12avs7dff4qankpocuplbn8hqa94d0.apps.googleusercontent.com";
+    const GOOGLE_API_KEY   = "AIzaSyAZysrYVLGr9nR4tP-LzUSqYzohHp5f7Cg";
+
+    const SCOPES = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly";
+    const DISCOVERY_DOCS = [
+      "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest",
+      "https://www.googleapis.com/discovery/v1/apis/tasks/v1/rest",
+    ];
+    const MEL_TZ = "Australia/Melbourne";
+  </script>
 </head>
 <body class="bg-[#141a32] text-white min-h-screen p-4 transition-all duration-500">
 <div class="container mx-auto max-w-7xl">
@@ -161,16 +174,6 @@
 </div>
 
 <script>
-  // ---------- USER CONFIG (replace placeholders) ----------
-  const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com";
-  const GOOGLE_API_KEY   = "YOUR_PUBLIC_BROWSER_API_KEY";
-  const SCOPES = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly";
-  const DISCOVERY_DOCS = [
-    "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest",
-    "https://www.googleapis.com/discovery/v1/apis/tasks/v1/rest",
-  ];
-  const MEL_TZ = "Australia/Melbourne";
-
   // Time and Date
   function updateTime() {
     const now = new Date();
@@ -225,7 +228,6 @@
         google.accounts.oauth2.revoke(token.access_token);
         gapi.client.setToken('');
         updateSigninUI(false);
-        // Clear UI
         document.getElementById('calendar').innerHTML = "";
         document.getElementById('tasks').innerHTML = "";
       }
@@ -258,7 +260,7 @@
     if (gapiInited && gisInited) show(document.getElementById('signin'));
   }
 
-  // ---------- Calendar (next 3 days, primary calendar) ----------
+  // ---------- Calendar (next 3 days, primary) ----------
   async function refreshCalendar() {
     const calendarEl = document.getElementById('calendar');
     calendarEl.innerHTML = `<div class="text-sm opacity-70">Loading events…</div>`;
@@ -313,15 +315,12 @@
   });
 
   // ---------- Tasks (default list) ----------
-  async function initTasks() {
-    await refreshTasks();
-  }
+  async function initTasks() { await refreshTasks(); }
 
   async function refreshTasks() {
     const tasksEl = document.getElementById('tasks');
     tasksEl.innerHTML = `<div class="text-sm opacity-70">Loading tasks…</div>`;
     try {
-      // Get default list (first one)
       const listsRes = await gapi.client.tasks.tasklists.list({ maxResults: 1 });
       const defaultList = (listsRes.result.items || [])[0];
       if (!defaultList) {
@@ -361,7 +360,7 @@
     if (gapi.client.getToken()) refreshTasks();
   });
 
-  // ---------- Mock Meal Plan (editable + saved to localStorage) ----------
+  // ---------- Meal Plan (editable + localStorage) ----------
   function initMealPlan() {
     const mealPlanElement = document.getElementById('meal-plan');
     const days = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday','Friday'];
@@ -414,7 +413,6 @@
     }
   }
 
-  // Initialize feather icons + meal plan after DOM loads
   document.addEventListener('DOMContentLoaded', () => {
     feather.replace();
     initMealPlan();
