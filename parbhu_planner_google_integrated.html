@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Parbhu Household Planner – Google Integrated</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/feather-icons"></script>
+  <script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#3B82F6',
+            secondary: '#10B981',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Calibri', sans-serif; }
+    h1, h2, h3, h4, h5, h6 { font-family: 'Calibri', sans-serif; font-weight: 700; }
+    .card {
+      backdrop-filter: blur(12px);
+      background-color: #0a0d19;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);
+      transition: all 0.3s ease;
+    }
+    .card:hover { transform: translateY(-5px); box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.25); }
+    .dark .card { background-color: rgba(15, 23, 42, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); }
+    .btn { padding: 0.5rem 0.75rem; border-radius: 0.5rem; font-size: 0.875rem; border: 1px solid rgba(255,255,255,0.2); }
+    .badge { display:inline-flex; align-items:center; padding: 0.125rem 0.5rem; border-radius: 0.375rem; font-size: 0.75rem; background: rgba(255,255,255,0.08); }
+  </style>
+
+  <!-- Google Identity Services & API client -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://apis.google.com/js/api.js"></script>
+</head>
+<body class="bg-[#141a32] text-white min-h-screen p-4 transition-all duration-500">
+<div class="container mx-auto max-w-7xl">
+  <header class="flex justify-between items-center mb-8">
+    <div class="flex items-center gap-3">
+      <h1 class="text-4xl font-bold text-primary tracking-tight">Parbhu Household Planner</h1>
+      <span id="signin-status" class="badge">Signed out</span>
+    </div>
+    <div class="flex items-center space-x-3">
+      <div id="time" class="text-3xl font-bold bg-blue-800/30 px-4 py-2 rounded-lg backdrop-blur-sm"></div>
+      <div id="date" class="text-2xl bg-blue-800/30 px-4 py-2 rounded-lg backdrop-blur-sm"></div>
+
+      <!-- Auth buttons -->
+      <button id="signin" class="btn hidden bg-blue-800/40 hover:bg-blue-700/60">Sign in with Google</button>
+      <button id="signout" class="btn hidden bg-blue-800/20 hover:bg-blue-700/40">Sign out</button>
+
+      <button id="theme-toggle" class="p-3 rounded-lg bg-blue-800/30 hover:bg-blue-700/50 backdrop-blur-sm transition-all">
+        <i data-feather="moon" class="hidden dark:block text-blue-300"></i>
+        <i data-feather="sun" class="block dark:hidden text-yellow-300"></i>
+      </button>
+    </div>
+  </header>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Calendar Section -->
+    <div class="lg:col-span-2 space-y-6">
+      <div class="card rounded-xl shadow-lg p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-2xl font-semibold text-primary">
+            <i data-feather="calendar" class="inline mr-2"></i>
+            Upcoming Events (Next 3 Days)
+          </h2>
+          <button id="refresh-events" class="text-sm text-secondary flex items-center">
+            Refresh <i data-feather="refresh-cw" class="ml-1 w-4 h-4"></i>
+          </button>
+        </div>
+        <div id="calendar" class="space-y-3">
+          <div class="animate-pulse flex space-x-4">
+            <div class="flex-1 space-y-4 py-1">
+              <div class="h-4 bg-gray-300/30 rounded w-3/4"></div>
+              <div class="space-y-2">
+                <div class="h-4 bg-gray-300/30 rounded"></div>
+                <div class="h-4 bg-gray-300/30 rounded w-5/6"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card rounded-xl shadow-lg p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-xl font-semibold text-primary">
+            <i data-feather="check-circle" class="inline mr-2"></i>
+            Google Tasks
+          </h2>
+          <button id="refresh-tasks" class="text-sm text-secondary flex items-center">
+            Refresh <i data-feather="refresh-cw" class="ml-1 w-4 h-4"></i>
+          </button>
+        </div>
+        <div id="tasks" class="space-y-2">
+          <div class="animate-pulse flex space-x-4">
+            <div class="flex-1 space-y-4 py-1">
+              <div class="h-4 bg-gray-300/30 rounded"></div>
+              <div class="h-4 bg-gray-300/30 rounded w-5/6"></div>
+              <div class="h-4 bg-gray-300/30 rounded w-3/4"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Weather & Meal Plan Section -->
+    <div class="space-y-6">
+      <div class="card rounded-xl shadow-lg p-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-xl font-semibold text-primary">
+            <i data-feather="cloud" class="inline mr-2"></i>
+            Weather in Tarneit
+          </h2>
+          <div class="text-sm text-secondary">
+            <span id="current-temp">22°C</span>
+            <span id="weather-description" class="capitalize">Partly Cloudy</span>
+          </div>
+        </div>
+        <div id="weather-summary" class="mb-4">
+          <p class="text-sm">Humidity: 65% | Wind: 15 km/h NE</p>
+          <p class="text-sm">Sunrise: 6:45 AM | Sunset: 7:30 PM</p>
+        </div>
+        <div id="weather-forecast" class="grid grid-cols-3 gap-2">
+          <div class="text-center bg-white/15 rounded-lg p-3 backdrop-blur-sm">
+            <div class="font-medium">Today</div>
+            <div class="text-2xl font-bold my-1">22°</div>
+            <div class="text-xs">Partly Cloudy</div>
+          </div>
+          <div class="text-center bg-white/15 rounded-lg p-3 backdrop-blur-sm">
+            <div class="font-medium">Tomorrow</div>
+            <div class="text-2xl font-bold my-1">24°</div>
+            <div class="text-xs">Sunny</div>
+          </div>
+          <div class="text-center bg-white/15 rounded-lg p-3 backdrop-blur-sm">
+            <div class="font-medium">Fri</div>
+            <div class="text-2xl font-bold my-1">20°</div>
+            <div class="text-xs">Showers</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card rounded-xl shadow-lg p-6">
+        <h2 class="text-2xl font-semibold text-primary mb-4">
+          <i data-feather="utensils" class="inline mr-2"></i>
+          Weekly Meal Plan
+        </h2>
+        <div id="meal-plan" class="space-y-3"></div>
+        <button id="save-meal-plan" class="mt-4 bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
+          Save Changes
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ---------- USER CONFIG (replace placeholders) ----------
+  const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com";
+  const GOOGLE_API_KEY   = "YOUR_PUBLIC_BROWSER_API_KEY";
+  const SCOPES = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly";
+  const DISCOVERY_DOCS = [
+    "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest",
+    "https://www.googleapis.com/discovery/v1/apis/tasks/v1/rest",
+  ];
+  const MEL_TZ = "Australia/Melbourne";
+
+  // Time and Date
+  function updateTime() {
+    const now = new Date();
+    document.getElementById('time').textContent = now.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
+    document.getElementById('date').textContent = now.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' });
+  }
+  setInterval(updateTime, 1000); updateTime();
+
+  // Theme Toggle
+  const themeToggle = document.getElementById('theme-toggle');
+  themeToggle.addEventListener('click', () => {
+    document.documentElement.classList.toggle('dark');
+    localStorage.setItem('theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+  });
+  if (localStorage.getItem('theme') === 'dark' || (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+    document.documentElement.classList.add('dark');
+  }
+
+  // ---------- Google Auth & API init ----------
+  let tokenClient;
+  let gapiInited = false;
+  let gisInited = false;
+
+  function show(el) { el.classList.remove('hidden'); }
+  function hide(el) { el.classList.add('hidden'); }
+
+  function updateSigninUI(signedIn) {
+    const status = document.getElementById('signin-status');
+    const signInBtn = document.getElementById('signin');
+    const signOutBtn = document.getElementById('signout');
+
+    if (signedIn) {
+      status.textContent = "Signed in";
+      status.style.background = "rgba(34,197,94,0.2)";
+      hide(signInBtn); show(signOutBtn);
+    } else {
+      status.textContent = "Signed out";
+      status.style.background = "rgba(255,255,255,0.08)";
+      show(signInBtn); hide(signOutBtn);
+    }
+  }
+
+  document.getElementById('signin').addEventListener('click', async () => {
+    try {
+      tokenClient.requestAccessToken({ prompt: 'consent' });
+    } catch (e) { console.error(e); }
+  });
+  document.getElementById('signout').addEventListener('click', async () => {
+    try {
+      const token = gapi.client.getToken();
+      if (token) {
+        google.accounts.oauth2.revoke(token.access_token);
+        gapi.client.setToken('');
+        updateSigninUI(false);
+        // Clear UI
+        document.getElementById('calendar').innerHTML = "";
+        document.getElementById('tasks').innerHTML = "";
+      }
+    } catch (e) { console.error(e); }
+  });
+
+  // Load gapi + GIS
+  window.onload = () => {
+    gapi.load('client', async () => {
+      await gapi.client.init({ apiKey: GOOGLE_API_KEY, discoveryDocs: DISCOVERY_DOCS });
+      gapiInited = true;
+      maybeEnableButtons();
+    });
+
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: SCOPES,
+      callback: async (resp) => {
+        if (resp.error) { console.error(resp); return; }
+        updateSigninUI(true);
+        await refreshCalendar();
+        await initTasks();
+      },
+    });
+    gisInited = true;
+    maybeEnableButtons();
+  };
+
+  function maybeEnableButtons() {
+    if (gapiInited && gisInited) show(document.getElementById('signin'));
+  }
+
+  // ---------- Calendar (next 3 days, primary calendar) ----------
+  async function refreshCalendar() {
+    const calendarEl = document.getElementById('calendar');
+    calendarEl.innerHTML = `<div class="text-sm opacity-70">Loading events…</div>`;
+
+    const now = new Date();
+    const end = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+    try {
+      const res = await gapi.client.calendar.events.list({
+        calendarId: 'primary',
+        timeMin: now.toISOString(),
+        timeMax: end.toISOString(),
+        singleEvents: true,
+        orderBy: 'startTime',
+      });
+
+      const events = res.result.items || [];
+      if (!events.length) {
+        calendarEl.innerHTML = `<div class="text-sm opacity-70">No upcoming events.</div>`;
+        return;
+      }
+
+      calendarEl.innerHTML = events.map(ev => {
+        const start = ev.start.dateTime ? new Date(ev.start.dateTime) : new Date(ev.start.date);
+        const endD  = ev.end?.dateTime ? new Date(ev.end.dateTime) : (ev.end?.date ? new Date(ev.end.date) : null);
+        const allDay = !ev.start.dateTime;
+
+        const dayStr = start.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'short', timeZone: MEL_TZ });
+        const timeStr = allDay
+          ? 'All day'
+          : `${start.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', timeZone: MEL_TZ })}${endD ? ' – ' + endD.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', timeZone: MEL_TZ }) : ''}`;
+
+        const location = ev.location ? `<div class="text-xs opacity-70 mt-0.5"><i data-feather="map-pin" class="inline w-3 h-3"></i> ${ev.location}</div>` : '';
+
+        return `
+          <div class="border-l-4 border-primary pl-3 py-2 bg-white/10 rounded-r-lg">
+            <div class="font-medium">${ev.summary || '(No title)'}</div>
+            <div class="text-sm text-gray-300">${dayStr}${allDay ? '' : `, ${timeStr}`}</div>
+            ${location}
+          </div>
+        `;
+      }).join('');
+
+      feather.replace();
+    } catch (e) {
+      console.error(e);
+      calendarEl.innerHTML = `<div class="text-sm text-red-400">Failed to load events: ${e.result?.error?.message || e.message}</div>`;
+    }
+  }
+  document.getElementById('refresh-events').addEventListener('click', () => {
+    if (gapi.client.getToken()) refreshCalendar();
+  });
+
+  // ---------- Tasks (default list) ----------
+  async function initTasks() {
+    await refreshTasks();
+  }
+
+  async function refreshTasks() {
+    const tasksEl = document.getElementById('tasks');
+    tasksEl.innerHTML = `<div class="text-sm opacity-70">Loading tasks…</div>`;
+    try {
+      // Get default list (first one)
+      const listsRes = await gapi.client.tasks.tasklists.list({ maxResults: 1 });
+      const defaultList = (listsRes.result.items || [])[0];
+      if (!defaultList) {
+        tasksEl.innerHTML = `<div class="text-sm opacity-70">No task lists found.</div>`;
+        return;
+      }
+      const res = await gapi.client.tasks.tasks.list({
+        tasklist: defaultList.id,
+        showCompleted: false,
+        showHidden: false,
+        maxResults: 100,
+      });
+      const tasks = (res.result.items || []).filter(t => !t.status || t.status !== 'completed');
+      if (!tasks.length) {
+        tasksEl.innerHTML = `<div class="text-sm opacity-70">No open tasks.</div>`;
+        return;
+      }
+      tasksEl.innerHTML = tasks.map(t => {
+        const due = t.due ? new Date(t.due) : null;
+        const dueStr = due ? due.toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MEL_TZ }) : '';
+        return `
+          <div class="flex items-start gap-2 py-1 border-b border-white/10">
+            <input type="checkbox" class="mt-1 rounded text-primary" disabled />
+            <div class="flex-1">
+              <div>${t.title || '(Untitled task)'}</div>
+              ${dueStr ? `<div class="text-xs opacity-70">Due ${dueStr}</div>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+    } catch (e) {
+      console.error(e);
+      tasksEl.innerHTML = `<div class="text-sm text-red-400">Failed to load tasks: ${e.result?.error?.message || e.message}</div>`;
+    }
+  }
+  document.getElementById('refresh-tasks').addEventListener('click', () => {
+    if (gapi.client.getToken()) refreshTasks();
+  });
+
+  // ---------- Mock Meal Plan (editable + saved to localStorage) ----------
+  function initMealPlan() {
+    const mealPlanElement = document.getElementById('meal-plan');
+    const days = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday','Friday'];
+    const defaultMeals = ['Family Dinner Out','Roast Chicken','Spaghetti Bolognese','Chicken Stir Fry','Beef Tacos','Vegetable Curry','Takeout Night'];
+    const defaultAssignees = ['Family','Family','Jayesh','Amrita','Jayesh','Amrita','Family'];
+
+    let mealPlanHTML = '';
+    days.forEach((day, index) => {
+      mealPlanHTML += `
+        <div class="grid grid-cols-3 items-center border-b border-white/10 pb-2">
+          <div class="font-medium">${day}</div>
+          <div class="text-sm">
+            <input type="text" value="${defaultMeals[index]}" class="bg-transparent border-b border-gray-400 focus:border-primary focus:outline-none w-full py-1" data-day="${day.toLowerCase()}-meal">
+          </div>
+          <div class="text-sm text-right">
+            <select class="bg-transparent border-b border-gray-400 focus:border-primary focus:outline-none" data-day="${day.toLowerCase()}-assignee">
+              <option value="Jayesh" ${defaultAssignees[index] === 'Jayesh' ? 'selected' : ''}>Jayesh</option>
+              <option value="Amrita" ${defaultAssignees[index] === 'Amrita' ? 'selected' : ''}>Amrita</option>
+              <option value="Family" ${defaultAssignees[index] === 'Family' ? 'selected' : ''}>Family</option>
+            </select>
+          </div>
+        </div>
+      `;
+    });
+    mealPlanElement.innerHTML = mealPlanHTML;
+
+    document.getElementById('save-meal-plan').addEventListener('click', () => {
+      const mealPlanData = {};
+      days.forEach(day => {
+        const dayKey = day.toLowerCase();
+        mealPlanData[dayKey] = {
+          meal: document.querySelector(`[data-day="${dayKey}-meal"]`).value,
+          assignee: document.querySelector(`[data-day="${dayKey}-assignee"]`).value
+        };
+      });
+      localStorage.setItem('mealPlan', JSON.stringify(mealPlanData));
+      alert('Meal plan saved!');
+    });
+
+    const savedMealPlan = localStorage.getItem('mealPlan');
+    if (savedMealPlan) {
+      const mealPlanData = JSON.parse(savedMealPlan);
+      days.forEach(day => {
+        const dayKey = day.toLowerCase();
+        if (mealPlanData[dayKey]) {
+          document.querySelector(`[data-day="${dayKey}-meal"]`).value = mealPlanData[dayKey].meal;
+          document.querySelector(`[data-day="${dayKey}-assignee"]`).value = mealPlanData[dayKey].assignee;
+        }
+      });
+    }
+  }
+
+  // Initialize feather icons + meal plan after DOM loads
+  document.addEventListener('DOMContentLoaded', () => {
+    feather.replace();
+    initMealPlan();
+  });
+</script>
+<script>feather.replace();</script>
+</body>
+</html>
