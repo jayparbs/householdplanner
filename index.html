@@ -34,6 +34,25 @@
     .dark .card { background-color: rgba(15, 23, 42, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); }
     .btn { padding: 0.5rem 0.75rem; border-radius: 0.5rem; font-size: 0.875rem; border: 1px solid rgba(255,255,255,0.2); }
     .badge { display:inline-flex; align-items:center; padding: 0.125rem 0.5rem; border-radius: 0.375rem; font-size: 0.75rem; background: rgba(255,255,255,0.08); }
+
+    /* Fix select dropdown options being “white on white” */
+    select {
+      color: #e5e7eb;           /* text-gray-200 */
+      background-color: transparent;
+    }
+    select:focus {
+      outline: none;
+      border-color: #3B82F6;
+    }
+    /* Many browsers render <option> in an OS menu; set colors regardless */
+    select option {
+      color: #e5e7eb;
+      background-color: #0f172a; /* slate-900 */
+    }
+    /* For Firefox dark form controls */
+    @media (prefers-color-scheme: dark) {
+      select { color-scheme: dark; }
+    }
   </style>
 
   <!-- Google Identity Services & Google API Client -->
@@ -43,7 +62,7 @@
   <!-- Your Google config -->
   <script>
     const GOOGLE_CLIENT_ID = "67683358478-9b12avs7dff4qankpocuplbn8hqa94d0.apps.googleusercontent.com";
-    const GOOGLE_API_KEY   = "AIzaSyBKXtFB3CJcceyzFFH6c17xm_7_W5n_RJc";
+    const GOOGLE_API_KEY   = "AIzaSyBKXtFB3CJcceyzFFH6c17xm_7_W5n_RJc";  /* <-- new key */
 
     const SCOPES = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly";
     const DISCOVERY_DOCS = [
@@ -51,6 +70,10 @@
       "https://www.googleapis.com/discovery/v1/apis/tasks/v1/rest",
     ];
     const MEL_TZ = "Australia/Melbourne";
+
+    /* Tarneit approx coords (works well for Wyndham area).
+       If you want to be precise, I can swap these for your exact lat/lon. */
+    const TARNEIT = { lat: -37.86, lon: 144.67 };
   </script>
 </head>
 <body class="bg-[#141a32] text-white min-h-screen p-4 transition-all duration-500">
@@ -132,30 +155,18 @@
             Weather in Tarneit
           </h2>
           <div class="text-sm text-secondary">
-            <span id="current-temp">22°C</span>
-            <span id="weather-description" class="capitalize">Partly Cloudy</span>
+            <span id="current-temp">—</span>
+            <span id="weather-description" class="capitalize">Loading…</span>
           </div>
         </div>
         <div id="weather-summary" class="mb-4">
-          <p class="text-sm">Humidity: 65% | Wind: 15 km/h NE</p>
-          <p class="text-sm">Sunrise: 6:45 AM | Sunset: 7:30 PM</p>
+          <p class="text-sm">Humidity: — | Wind: —</p>
+          <p class="text-sm">Sunrise: — | Sunset: —</p>
         </div>
         <div id="weather-forecast" class="grid grid-cols-3 gap-2">
-          <div class="text-center bg-white/15 rounded-lg p-3 backdrop-blur-sm">
-            <div class="font-medium">Today</div>
-            <div class="text-2xl font-bold my-1">22°</div>
-            <div class="text-xs">Partly Cloudy</div>
-          </div>
-          <div class="text-center bg-white/15 rounded-lg p-3 backdrop-blur-sm">
-            <div class="font-medium">Tomorrow</div>
-            <div class="text-2xl font-bold my-1">24°</div>
-            <div class="text-xs">Sunny</div>
-          </div>
-          <div class="text-center bg-white/15 rounded-lg p-3 backdrop-blur-sm">
-            <div class="font-medium">Fri</div>
-            <div class="text-2xl font-bold my-1">20°</div>
-            <div class="text-xs">Showers</div>
-          </div>
+          <div class="text-center bg-white/15 rounded-lg p-3 backdrop-blur-sm h-24"></div>
+          <div class="text-center bg-white/15 rounded-lg p-3 backdrop-blur-sm h-24"></div>
+          <div class="text-center bg-white/15 rounded-lg p-3 backdrop-blur-sm h-24"></div>
         </div>
       </div>
 
@@ -192,10 +203,11 @@
     document.documentElement.classList.add('dark');
   }
 
-  // ---------- Google Auth & API init ----------
+  // ---------- Google Auth & API init with "stay signed in" ----------
   let tokenClient;
   let gapiInited = false;
   let gisInited = false;
+  let tokenRefreshTimer = null;
 
   function show(el) { el.classList.remove('hidden'); }
   function hide(el) { el.classList.add('hidden'); }
@@ -204,7 +216,6 @@
     const status = document.getElementById('signin-status');
     const signInBtn = document.getElementById('signin');
     const signOutBtn = document.getElementById('signout');
-
     if (signedIn) {
       status.textContent = "Signed in";
       status.style.background = "rgba(34,197,94,0.2)";
@@ -216,21 +227,58 @@
     }
   }
 
-  document.getElementById('signin').addEventListener('click', async () => {
-    try {
-      tokenClient.requestAccessToken({ prompt: 'consent' });
-    } catch (e) { console.error(e); }
+  function saveToken(tokenObj) {
+    const expiresAt = Date.now() + (tokenObj.expires_in ? (tokenObj.expires_in * 1000) : 3600_000);
+    const saved = { ...tokenObj, expires_at: expiresAt };
+    localStorage.setItem('googleToken', JSON.stringify(saved));
+    localStorage.setItem('googleSignedIn', 'true');
+  }
+  function loadToken() {
+    try { const raw = localStorage.getItem('googleToken'); return raw ? JSON.parse(raw) : null; }
+    catch { return null; }
+  }
+  function clearSavedToken() {
+    localStorage.removeItem('googleToken');
+    localStorage.removeItem('googleSignedIn');
+  }
+
+  function startTokenRefreshLoop() {
+    if (tokenRefreshTimer) clearTimeout(tokenRefreshTimer);
+    const schedule = () => {
+      const saved = loadToken();
+      const msToExpiry = saved?.expires_at ? (saved.expires_at - Date.now()) : (55 * 60 * 1000);
+      const wait = Math.max(5 * 60 * 1000, msToExpiry - 5 * 60 * 1000);
+      tokenRefreshTimer = setTimeout(() => {
+        try { tokenClient.requestAccessToken({ prompt: '' }); } catch (e) { console.warn('Silent refresh failed:', e); }
+        schedule();
+      }, wait);
+    };
+    schedule();
+  }
+
+  async function onSignedIn() {
+    updateSigninUI(true);
+    startTokenRefreshLoop();
+    await refreshCalendar();
+    await (typeof initTasks === 'function' ? initTasks() : refreshTasks());
+  }
+
+  document.getElementById('signin').addEventListener('click', () => {
+    tokenClient.requestAccessToken({ prompt: 'consent' });
   });
+
   document.getElementById('signout').addEventListener('click', async () => {
     try {
-      const token = gapi.client.getToken();
-      if (token) {
-        google.accounts.oauth2.revoke(token.access_token);
-        gapi.client.setToken('');
-        updateSigninUI(false);
-        document.getElementById('calendar').innerHTML = "";
-        document.getElementById('tasks').innerHTML = "";
+      const t = gapi.client.getToken();
+      if (t?.access_token) {
+        google.accounts.oauth2.revoke(t.access_token);
       }
+      gapi.client.setToken('');
+      clearSavedToken();
+      if (tokenRefreshTimer) clearTimeout(tokenRefreshTimer);
+      updateSigninUI(false);
+      document.getElementById('calendar').innerHTML = "";
+      document.getElementById('tasks').innerHTML = "";
     } catch (e) { console.error(e); }
   });
 
@@ -239,26 +287,53 @@
     gapi.load('client', async () => {
       await gapi.client.init({ apiKey: GOOGLE_API_KEY, discoveryDocs: DISCOVERY_DOCS });
       gapiInited = true;
-      maybeEnableButtons();
+
+      const saved = loadToken();
+      if (saved && saved.expires_at && saved.expires_at - Date.now() > 60_000) {
+        gapi.client.setToken(saved);
+        onSignedIn();
+      } else if (localStorage.getItem('googleSignedIn') === 'true') {
+        try { tokenClient.requestAccessToken({ prompt: '' }); } catch (e) { console.warn('Silent sign-in failed:', e); }
+      }
+
+      maybeEnableSignIn();
     });
 
     tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
       scope: SCOPES,
-      callback: async (resp) => {
-        if (resp.error) { console.error(resp); return; }
-        updateSigninUI(true);
-        await refreshCalendar();
-        await initTasks();
+      callback: (resp) => {
+        if (resp?.error) {
+          console.error('GIS error:', resp);
+          updateSigninUI(false);
+          return;
+        }
+        const current = gapi.client.getToken() || {};
+        const tokenToSave = {
+          access_token: current.access_token || resp.access_token,
+          expires_in: (resp.expires_in ?? 3600)
+        };
+        saveToken(tokenToSave);
+        onSignedIn();
       },
     });
+
     gisInited = true;
-    maybeEnableButtons();
+    maybeEnableSignIn();
   };
 
-  function maybeEnableButtons() {
+  function maybeEnableSignIn() {
     if (gapiInited && gisInited) show(document.getElementById('signin'));
   }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      const saved = loadToken();
+      if (saved && saved.expires_at - Date.now() < 5 * 60 * 1000) {
+        try { tokenClient.requestAccessToken({ prompt: '' }); } catch {}
+      }
+    }
+  });
 
   // ---------- Calendar (next 3 days, primary) ----------
   async function refreshCalendar() {
@@ -360,6 +435,71 @@
     if (gapi.client.getToken()) refreshTasks();
   });
 
+  // ---------- Weather (Open-Meteo, live for Tarneit) ----------
+  async function loadWeather() {
+    const currentTemp = document.getElementById('current-temp');
+    const desc = document.getElementById('weather-description');
+    const summary = document.getElementById('weather-summary');
+    const forecast = document.getElementById('weather-forecast');
+
+    try {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${TARNEIT.lat}&longitude=${TARNEIT.lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset&timezone=Australia%2FMelbourne`;
+      const r = await fetch(url);
+      const data = await r.json();
+
+      // Current
+      const cur = data.current;
+      const wmo = cur.weather_code;
+      const label = weatherLabel(wmo);
+      currentTemp.textContent = `${Math.round(cur.temperature_2m)}°C`;
+      desc.textContent = label;
+      summary.innerHTML = `
+        <p class="text-sm">Humidity: ${Math.round(cur.relative_humidity_2m)}% | Wind: ${Math.round(cur.wind_speed_10m)} km/h</p>
+        <p class="text-sm">Sunrise: ${fmtTime(data.daily.sunrise[0])} | Sunset: ${fmtTime(data.daily.sunset[0])}</p>
+      `;
+
+      // Next 3 days (including today)
+      const daysHtml = [0,1,2].map(i => {
+        const dayName = new Date(data.daily.time[i]).toLocaleDateString('en-AU',{weekday:'short'});
+        const high = Math.round(data.daily.temperature_2m_max[i]);
+        const low  = Math.round(data.daily.temperature_2m_min[i]);
+        const dlabel = weatherLabel(data.daily.weather_code[i]);
+        return `
+          <div class="text-center bg-white/15 rounded-lg p-3 backdrop-blur-sm">
+            <div class="font-medium">${i===0?'Today': (i===1?'Tomorrow':dayName)}</div>
+            <div class="text-2xl font-bold my-1">${high}°</div>
+            <div class="text-xs">${dlabel} · Low ${low}°</div>
+          </div>
+        `;
+      }).join('');
+      forecast.innerHTML = daysHtml;
+
+    } catch (e) {
+      console.error(e);
+      desc.textContent = "Unavailable";
+    }
+  }
+  function fmtTime(iso) {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+  }
+  function weatherLabel(code){
+    // Minimal WMO code mapping
+    const map = {
+      0:'Clear sky', 1:'Mainly clear', 2:'Partly cloudy', 3:'Overcast',
+      45:'Fog', 48:'Depositing rime fog',
+      51:'Light drizzle', 53:'Drizzle', 55:'Dense drizzle',
+      61:'Light rain', 63:'Rain', 65:'Heavy rain',
+      66:'Freezing rain', 67:'Heavy freezing rain',
+      71:'Light snow', 73:'Snow', 75:'Heavy snow',
+      77:'Snow grains',
+      80:'Light showers', 81:'Showers', 82:'Heavy showers',
+      85:'Snow showers', 86:'Heavy snow showers',
+      95:'Thunderstorm', 96:'Thunderstorm (hail)', 99:'Thunderstorm (hail)'
+    };
+    return map[code] ?? '—';
+  }
+
   // ---------- Meal Plan (editable + localStorage) ----------
   function initMealPlan() {
     const mealPlanElement = document.getElementById('meal-plan');
@@ -376,7 +516,7 @@
             <input type="text" value="${defaultMeals[index]}" class="bg-transparent border-b border-gray-400 focus:border-primary focus:outline-none w-full py-1" data-day="${day.toLowerCase()}-meal">
           </div>
           <div class="text-sm text-right">
-            <select class="bg-transparent border-b border-gray-400 focus:border-primary focus:outline-none" data-day="${day.toLowerCase()}-assignee">
+            <select class="bg-transparent border-b border-gray-400 focus:border-primary focus:outline-none pr-6" data-day="${day.toLowerCase()}-assignee">
               <option value="Jayesh" ${defaultAssignees[index] === 'Jayesh' ? 'selected' : ''}>Jayesh</option>
               <option value="Amrita" ${defaultAssignees[index] === 'Amrita' ? 'selected' : ''}>Amrita</option>
               <option value="Family" ${defaultAssignees[index] === 'Family' ? 'selected' : ''}>Family</option>
@@ -416,6 +556,7 @@
   document.addEventListener('DOMContentLoaded', () => {
     feather.replace();
     initMealPlan();
+    loadWeather(); // live weather
   });
 </script>
 <script>feather.replace();</script>
