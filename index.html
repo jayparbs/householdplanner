@@ -80,8 +80,14 @@
       <div id="time" class="text-3xl font-bold bg-blue-800/30 px-4 py-2 rounded-lg backdrop-blur-sm"></div>
       <div id="date" class="text-2xl bg-blue-800/30 px-4 py-2 rounded-lg backdrop-blur-sm"></div>
 
-      <!-- Auth buttons -->
-      <button id="signin" class="btn hidden bg-blue-800/40 hover:bg-blue-700/60">Sign in with Google</button>
+      <!-- Sign in is always visible; disabled until Google libs are ready -->
+      <button id="signin"
+              class="btn bg-blue-800/40 hover:bg-blue-700/60 opacity-60 cursor-not-allowed"
+              disabled
+              aria-disabled="true"
+              title="Loading Google…">
+        Sign in with Google
+      </button>
       <button id="signout" class="btn hidden bg-blue-800/20 hover:bg-blue-700/40">Sign out</button>
 
       <button id="theme-toggle" class="p-3 rounded-lg bg-blue-800/30 hover:bg-blue-700/50 backdrop-blur-sm transition-all">
@@ -196,7 +202,7 @@
     document.documentElement.classList.add('dark');
   }
 
-  // ---------- Google Auth & API init with "stay signed in" ----------
+  // ---------- Google Auth & API init (robust across refresh) ----------
   let tokenClient;
   let gapiInited = false;
   let gisInited = false;
@@ -205,18 +211,34 @@
   function show(el) { el.classList.remove('hidden'); }
   function hide(el) { el.classList.add('hidden'); }
 
+  function setSigninEnabled(enabled) {
+    const btn = document.getElementById('signin');
+    if (!btn) return;
+    btn.disabled = !enabled;
+    btn.setAttribute('aria-disabled', String(!enabled));
+    if (enabled) {
+      btn.classList.remove('opacity-60','cursor-not-allowed');
+      btn.title = 'Sign in with Google';
+    } else {
+      btn.classList.add('opacity-60','cursor-not-allowed');
+      btn.title = 'Loading Google…';
+    }
+  }
+
   function updateSigninUI(signedIn) {
     const status = document.getElementById('signin-status');
-    const signInBtn = document.getElementById('signin');
     const signOutBtn = document.getElementById('signout');
+
     if (signedIn) {
       status.textContent = "Signed in";
       status.style.background = "rgba(34,197,94,0.2)";
-      hide(signInBtn); show(signOutBtn);
+      show(signOutBtn);
+      setSigninEnabled(false); // keep sign-in visible but disabled
     } else {
       status.textContent = "Signed out";
       status.style.background = "rgba(255,255,255,0.08)";
-      show(signInBtn); hide(signOutBtn);
+      hide(signOutBtn);
+      setSigninEnabled(gapiInited && gisInited); // enable if libs ready
     }
   }
 
@@ -252,20 +274,38 @@
   async function onSignedIn() {
     updateSigninUI(true);
     startTokenRefreshLoop();
-
-    // Sync meal plan first so UI shows the latest across devices
-    try {
-      await syncMealPlanFromDrive();
-    } catch (e) {
-      console.warn('Meal plan Drive sync failed (using local):', e);
-    }
-
-    // Then load the rest
+    try { await syncMealPlanFromDrive(); } catch (e) { console.warn('Meal plan Drive sync failed (using local):', e); }
     await refreshCalendar();
     await (typeof initTasks === 'function' ? initTasks() : refreshTasks());
   }
 
+  async function tryRestoreSession() {
+    const saved = loadToken();
+
+    // Use existing fresh token
+    if (saved && saved.expires_at && (saved.expires_at - Date.now()) > 60_000) {
+      gapi.client.setToken({ access_token: saved.access_token });
+      await onSignedIn();
+      return;
+    }
+
+    // If previously signed in, attempt silent refresh
+    if (localStorage.getItem('googleSignedIn') === 'true') {
+      try {
+        tokenClient.requestAccessToken({ prompt: '' });
+        return; // on success, callback will call onSignedIn()
+      } catch (e) {
+        console.warn('Silent sign-in failed:', e);
+      }
+    }
+
+    // Fallthrough: show signed-out state with enabled button
+    updateSigninUI(false);
+  }
+
+  // Click handlers
   document.getElementById('signin').addEventListener('click', () => {
+    if (!(gapiInited && gisInited)) return; // still loading
     tokenClient.requestAccessToken({ prompt: 'consent' });
   });
 
@@ -284,23 +324,9 @@
     } catch (e) { console.error(e); }
   });
 
-  // Load gapi + GIS
+  // Init order: GIS first (tokenClient), then GAPI, then restore session
   window.onload = () => {
-    gapi.load('client', async () => {
-      await gapi.client.init({ apiKey: GOOGLE_API_KEY, discoveryDocs: DISCOVERY_DOCS });
-      gapiInited = true;
-
-      const saved = loadToken();
-      if (saved && saved.expires_at && saved.expires_at - Date.now() > 60_000) {
-        gapi.client.setToken(saved);
-        onSignedIn();
-      } else if (localStorage.getItem('googleSignedIn') === 'true') {
-        try { tokenClient.requestAccessToken({ prompt: '' }); } catch (e) { console.warn('Silent sign-in failed:', e); }
-      }
-
-      maybeEnableSignIn();
-    });
-
+    // 1) Init GIS FIRST
     tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
       scope: SCOPES,
@@ -319,14 +345,18 @@
         onSignedIn();
       },
     });
-
     gisInited = true;
-    maybeEnableSignIn();
-  };
 
-  function maybeEnableSignIn() {
-    if (gapiInited && gisInited) show(document.getElementById('signin'));
-  }
+    // 2) Load GAPI
+    gapi.load('client', async () => {
+      await gapi.client.init({ apiKey: GOOGLE_API_KEY, discoveryDocs: DISCOVERY_DOCS });
+      gapiInited = true;
+
+      // 3) With BOTH ready, restore session or enable the button
+      setSigninEnabled(true);
+      await tryRestoreSession();
+    });
+  };
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
