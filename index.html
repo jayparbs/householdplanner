@@ -5,21 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Parbhu Household Planner</title>
   <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+
+  <!-- Tailwind + Feather -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/feather-icons"></script>
-  <script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
+
   <script>
     tailwind.config = {
       theme: {
         extend: {
-          colors: {
-            primary: '#3B82F6',
-            secondary: '#10B981',
-          }
+          colors: { primary: '#3B82F6', secondary: '#10B981' }
         }
       }
     }
   </script>
+
   <style>
     body { font-family: 'Calibri', sans-serif; }
     h1, h2, h3, h4, h5, h6 { font-family: 'Calibri', sans-serif; font-weight: 700; }
@@ -36,43 +36,36 @@
     .badge { display:inline-flex; align-items:center; padding: 0.125rem 0.5rem; border-radius: 0.375rem; font-size: 0.75rem; background: rgba(255,255,255,0.08); }
 
     /* Fix select dropdown options being “white on white” */
-    select {
-      color: #e5e7eb;           /* text-gray-200 */
-      background-color: transparent;
-    }
-    select:focus {
-      outline: none;
-      border-color: #3B82F6;
-    }
-    /* Many browsers render <option> in an OS menu; set colors regardless */
-    select option {
-      color: #e5e7eb;
-      background-color: #0f172a; /* slate-900 */
-    }
-    /* For Firefox dark form controls */
-    @media (prefers-color-scheme: dark) {
-      select { color-scheme: dark; }
-    }
+    select { color: #e5e7eb; background-color: transparent; }
+    select:focus { outline: none; border-color: #3B82F6; }
+    select option { color: #e5e7eb; background-color: #0f172a; }
+    @media (prefers-color-scheme: dark) { select { color-scheme: dark; } }
   </style>
 
   <!-- Google Identity Services & Google API Client -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="https://apis.google.com/js/api.js"></script>
 
-  <!-- Your Google config -->
+  <!-- Google config -->
   <script>
     const GOOGLE_CLIENT_ID = "67683358478-9b12avs7dff4qankpocuplbn8hqa94d0.apps.googleusercontent.com";
-    const GOOGLE_API_KEY   = "AIzaSyBKXtFB3CJcceyzFFH6c17xm_7_W5n_RJc";  /* <-- new key */
+    const GOOGLE_API_KEY   = "AIzaSyBKXtFB3CJcceyzFFH6c17xm_7_W5n_RJc";
 
-    const SCOPES = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly";
+    // Add Drive AppData scope for cross-device sync
+    const SCOPES = [
+      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/tasks.readonly",
+      "https://www.googleapis.com/auth/drive.appdata"
+    ].join(" ");
+
+    // Include Drive discovery
     const DISCOVERY_DOCS = [
       "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest",
       "https://www.googleapis.com/discovery/v1/apis/tasks/v1/rest",
+      "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"
     ];
-    const MEL_TZ = "Australia/Melbourne";
 
-    /* Tarneit approx coords (works well for Wyndham area).
-       If you want to be precise, I can swap these for your exact lat/lon. */
+    const MEL_TZ = "Australia/Melbourne";
     const TARNEIT = { lat: -37.86, lon: 144.67 };
   </script>
 </head>
@@ -259,6 +252,15 @@
   async function onSignedIn() {
     updateSigninUI(true);
     startTokenRefreshLoop();
+
+    // Sync meal plan first so UI shows the latest across devices
+    try {
+      await syncMealPlanFromDrive();
+    } catch (e) {
+      console.warn('Meal plan Drive sync failed (using local):', e);
+    }
+
+    // Then load the rest
     await refreshCalendar();
     await (typeof initTasks === 'function' ? initTasks() : refreshTasks());
   }
@@ -435,7 +437,7 @@
     if (gapi.client.getToken()) refreshTasks();
   });
 
-  // ---------- Weather (Open-Meteo, live for Tarneit) ----------
+  // ---------- Weather (Open-Meteo) ----------
   async function loadWeather() {
     const currentTemp = document.getElementById('current-temp');
     const desc = document.getElementById('weather-description');
@@ -447,7 +449,6 @@
       const r = await fetch(url);
       const data = await r.json();
 
-      // Current
       const cur = data.current;
       const wmo = cur.weather_code;
       const label = weatherLabel(wmo);
@@ -458,7 +459,6 @@
         <p class="text-sm">Sunrise: ${fmtTime(data.daily.sunrise[0])} | Sunset: ${fmtTime(data.daily.sunset[0])}</p>
       `;
 
-      // Next 3 days (including today)
       const daysHtml = [0,1,2].map(i => {
         const dayName = new Date(data.daily.time[i]).toLocaleDateString('en-AU',{weekday:'short'});
         const high = Math.round(data.daily.temperature_2m_max[i]);
@@ -484,7 +484,6 @@
     return d.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
   }
   function weatherLabel(code){
-    // Minimal WMO code mapping
     const map = {
       0:'Clear sky', 1:'Mainly clear', 2:'Partly cloudy', 3:'Overcast',
       45:'Fog', 48:'Depositing rime fog',
@@ -500,7 +499,7 @@
     return map[code] ?? '—';
   }
 
-  // ---------- Meal Plan (editable + localStorage) ----------
+  // ---------- Meal Plan (UI + Local) ----------
   function initMealPlan() {
     const mealPlanElement = document.getElementById('meal-plan');
     const days = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday','Friday'];
@@ -527,7 +526,21 @@
     });
     mealPlanElement.innerHTML = mealPlanHTML;
 
-    document.getElementById('save-meal-plan').addEventListener('click', () => {
+    // Hydrate from local if present
+    const savedMealPlan = localStorage.getItem('mealPlan');
+    if (savedMealPlan) {
+      const mealPlanData = JSON.parse(savedMealPlan);
+      days.forEach(day => {
+        const dayKey = day.toLowerCase();
+        if (mealPlanData[dayKey]) {
+          document.querySelector(`[data-day="${dayKey}-meal"]`).value = mealPlanData[dayKey].meal ?? '';
+          document.querySelector(`[data-day="${dayKey}-assignee"]`).value = mealPlanData[dayKey].assignee ?? 'Family';
+        }
+      });
+    }
+
+    // Save button -> local + cloud
+    document.getElementById('save-meal-plan').addEventListener('click', async () => {
       const mealPlanData = {};
       days.forEach(day => {
         const dayKey = day.toLowerCase();
@@ -536,23 +549,157 @@
           assignee: document.querySelector(`[data-day="${dayKey}-assignee"]`).value
         };
       });
-      localStorage.setItem('mealPlan', JSON.stringify(mealPlanData));
-      alert('Meal plan saved!');
+      saveMealPlanLocal(mealPlanData);
+      try {
+        await savePlannerToDrive();
+        alert('Meal plan saved and synced!');
+      } catch (e) {
+        console.error(e);
+        alert('Saved locally. Sync will retry next time you sign in.');
+      }
     });
 
-    const savedMealPlan = localStorage.getItem('mealPlan');
-    if (savedMealPlan) {
-      const mealPlanData = JSON.parse(savedMealPlan);
-      days.forEach(day => {
-        const dayKey = day.toLowerCase();
-        if (mealPlanData[dayKey]) {
-          document.querySelector(`[data-day="${dayKey}-meal"]`).value = mealPlanData[dayKey].meal;
-          document.querySelector(`[data-day="${dayKey}-assignee"]`).value = mealPlanData[dayKey].assignee;
-        }
+    // Autosave on change (local immediate, cloud debounced)
+    mealPlanElement.querySelectorAll('input[type="text"], select').forEach(el => {
+      el.addEventListener('change', () => {
+        const current = getMealPlanFromUI();
+        saveMealPlanLocal(current);
+        saveDebounced();
       });
-    }
+    });
   }
 
+  // ---------- Meal Plan Sync (Drive AppData) ----------
+  const MP_STORAGE_KEY = 'mealPlan';
+  const MP_META_KEY    = 'mealPlan:meta';   // { updatedAt }
+  const MP_DRIVE_FILE  = 'planner.json';
+
+  function getMealPlanFromUI() {
+    const days = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday','Friday'];
+    const plan = {};
+    days.forEach(day => {
+      const key = day.toLowerCase();
+      plan[key] = {
+        meal: document.querySelector(`[data-day="${key}-meal"]`).value,
+        assignee: document.querySelector(`[data-day="${key}-assignee"]`).value
+      };
+    });
+    return plan;
+  }
+  function applyMealPlanToUI(plan) {
+    if (!plan) return;
+    const days = ['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday','Friday'];
+    days.forEach(day => {
+      const key = day.toLowerCase();
+      const row = plan[key];
+      if (row) {
+        const mealEl = document.querySelector(`[data-day="${key}-meal"]`);
+        const assEl  = document.querySelector(`[data-day="${key}-assignee"]`);
+        if (mealEl) mealEl.value = row.meal ?? '';
+        if (assEl)  assEl.value  = row.assignee ?? 'Family';
+      }
+    });
+  }
+  function saveMealPlanLocal(plan) {
+    localStorage.setItem(MP_STORAGE_KEY, JSON.stringify(plan));
+    localStorage.setItem(MP_META_KEY, JSON.stringify({ updatedAt: Date.now() }));
+  }
+  function loadMealPlanLocal() {
+    try { return JSON.parse(localStorage.getItem(MP_STORAGE_KEY) || '{}'); }
+    catch { return {}; }
+  }
+  function loadMetaLocal() {
+    try { return JSON.parse(localStorage.getItem(MP_META_KEY) || '{}'); }
+    catch { return {}; }
+  }
+
+  async function ensureDriveLoaded() {
+    if (!gapi.client?.drive) {
+      await gapi.client.load('drive', 'v3');
+    }
+  }
+  async function findDrivePlannerFile() {
+    await ensureDriveLoaded();
+    const list = await gapi.client.drive.files.list({
+      spaces: 'appDataFolder',
+      q: `name='${MP_DRIVE_FILE}' and trashed=false`,
+      fields: 'files(id, name, modifiedTime)'
+    });
+    return (list.result.files || [])[0] || null;
+  }
+  async function downloadPlannerFromDrive(fileId) {
+    const res = await gapi.client.drive.files.get({ fileId, alt: 'media' });
+    return res.body ? JSON.parse(res.body) : res.result;
+  }
+  async function uploadPlannerToDrive(payload, fileId) {
+    await ensureDriveLoaded();
+    const metadata = {
+      name: MP_DRIVE_FILE,
+      parents: ['appDataFolder'],
+      mimeType: 'application/json'
+    };
+    const boundary = '-------314159265358979323846';
+    const delimiter = `\r\n--${boundary}\r\n`;
+    const closeDelim = `\r\n--${boundary}--`;
+
+    const body =
+      delimiter + 'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(metadata) +
+      delimiter + 'Content-Type: application/json\r\n\r\n' +
+      JSON.stringify(payload) +
+      closeDelim;
+
+    const path = fileId
+      ? `/upload/drive/v3/files/${fileId}?uploadType=multipart`
+      : '/upload/drive/v3/files?uploadType=multipart';
+
+    await gapi.client.request({
+      path,
+      method: fileId ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': `multipart/related; boundary="${boundary}"` },
+      body
+    });
+  }
+  async function savePlannerToDrive() {
+    const plan = loadMealPlanLocal();
+    const meta = loadMetaLocal();
+    const payload = { data: plan, meta: { ...meta, updatedAt: Date.now() } };
+    const existing = await findDrivePlannerFile();
+    await uploadPlannerToDrive(payload, existing?.id);
+  }
+  async function syncMealPlanFromDrive() {
+    const existing = await findDrivePlannerFile();
+    const localMeta = loadMetaLocal();
+    const localTs = Number(localMeta.updatedAt || 0);
+
+    if (!existing) {
+      const localPlan = loadMealPlanLocal();
+      const hasLocal = Object.keys(localPlan).length > 0;
+      if (hasLocal) await savePlannerToDrive();
+      return { source: hasLocal ? 'local->drive' : 'none' };
+    }
+
+    const cloudPayload = await downloadPlannerFromDrive(existing.id);
+    const cloudTs = Number(cloudPayload?.meta?.updatedAt || 0);
+
+    if (cloudTs >= localTs) {
+      saveMealPlanLocal(cloudPayload.data || {});
+      applyMealPlanToUI(cloudPayload.data || {});
+      return { source: 'drive->local' };
+    } else {
+      await savePlannerToDrive();
+      return { source: 'local->drive' };
+    }
+  }
+  const saveDebounced = (() => {
+    let t;
+    return () => {
+      clearTimeout(t);
+      t = setTimeout(() => savePlannerToDrive().catch(console.error), 800);
+    };
+  })();
+
+  // ---------- Boot ----------
   document.addEventListener('DOMContentLoaded', () => {
     feather.replace();
     initMealPlan();
