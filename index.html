@@ -51,7 +51,7 @@
     const GOOGLE_CLIENT_ID = "67683358478-9b12avs7dff4qankpocuplbn8hqa94d0.apps.googleusercontent.com";
     const GOOGLE_API_KEY   = "AIzaSyBKXtFB3CJcceyzFFH6c17xm_7_W5n_RJc";
 
-    // Add Drive AppData scope for cross-device sync
+    // Drive AppData scope for cross-device sync
     const SCOPES = [
       "https://www.googleapis.com/auth/calendar.readonly",
       "https://www.googleapis.com/auth/tasks.readonly",
@@ -80,12 +80,11 @@
       <div id="time" class="text-3xl font-bold bg-blue-800/30 px-4 py-2 rounded-lg backdrop-blur-sm"></div>
       <div id="date" class="text-2xl bg-blue-800/30 px-4 py-2 rounded-lg backdrop-blur-sm"></div>
 
-      <!-- Sign in is always visible; disabled until Google libs are ready -->
+      <!-- Sign in is always visible and clickable -->
       <button id="signin"
-              class="btn bg-blue-800/40 hover:bg-blue-700/60 opacity-60 cursor-not-allowed"
-              disabled
-              aria-disabled="true"
-              title="Loading Google…">
+              class="btn bg-blue-800/40 hover:bg-blue-700/60"
+              aria-disabled="false"
+              title="Sign in with Google">
         Sign in with Google
       </button>
       <button id="signout" class="btn hidden bg-blue-800/20 hover:bg-blue-700/40">Sign out</button>
@@ -211,18 +210,13 @@
   function show(el) { el.classList.remove('hidden'); }
   function hide(el) { el.classList.add('hidden'); }
 
+  // Keep button always clickable; we gate action in the handler
   function setSigninEnabled(enabled) {
     const btn = document.getElementById('signin');
     if (!btn) return;
-    btn.disabled = !enabled;
+    btn.disabled = false; // never visually/semantically disable
     btn.setAttribute('aria-disabled', String(!enabled));
-    if (enabled) {
-      btn.classList.remove('opacity-60','cursor-not-allowed');
-      btn.title = 'Sign in with Google';
-    } else {
-      btn.classList.add('opacity-60','cursor-not-allowed');
-      btn.title = 'Loading Google…';
-    }
+    btn.title = enabled ? 'Sign in with Google' : 'Loading Google…';
   }
 
   function updateSigninUI(signedIn) {
@@ -233,12 +227,12 @@
       status.textContent = "Signed in";
       status.style.background = "rgba(34,197,94,0.2)";
       show(signOutBtn);
-      setSigninEnabled(false); // keep sign-in visible but disabled
+      setSigninEnabled(false); // keep sign-in visible but inert while signed in
     } else {
       status.textContent = "Signed out";
       status.style.background = "rgba(255,255,255,0.08)";
       hide(signOutBtn);
-      setSigninEnabled(gapiInited && gisInited); // enable if libs ready
+      setSigninEnabled(true); // force-enable when signed out
     }
   }
 
@@ -301,11 +295,16 @@
 
     // Fallthrough: show signed-out state with enabled button
     updateSigninUI(false);
+    setSigninEnabled(true);
   }
 
   // Click handlers
   document.getElementById('signin').addEventListener('click', () => {
-    if (!(gapiInited && gisInited)) return; // still loading
+    // If libs not ready yet, best-effort kick and bail gracefully
+    if (!(gapiInited && gisInited)) {
+      try { tokenClient?.requestAccessToken({ prompt: 'consent' }); } catch {}
+      return;
+    }
     tokenClient.requestAccessToken({ prompt: 'consent' });
   });
 
@@ -334,6 +333,7 @@
         if (resp?.error) {
           console.error('GIS error:', resp);
           updateSigninUI(false);
+          setSigninEnabled(true);
           return;
         }
         const current = gapi.client.getToken() || {};
@@ -357,6 +357,11 @@
       await tryRestoreSession();
     });
   };
+
+  // Belt-and-braces: ensure button is enabled on first paint
+  document.addEventListener('DOMContentLoaded', () => {
+    setSigninEnabled(true);
+  });
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
@@ -732,6 +737,7 @@
   // ---------- Boot ----------
   document.addEventListener('DOMContentLoaded', () => {
     feather.replace();
+    setSigninEnabled(true); // ensure button looks usable immediately
     initMealPlan();
     loadWeather(); // live weather
   });
